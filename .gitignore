@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+._*
+
+# mpremote / MicroPython
+.mpremote/
+*.uf2
+mpremote.log
