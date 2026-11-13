@@ -4,8 +4,12 @@ from machine import I2C, Pin
 
 import config
 from mpu6050 import MPU6050
+from motors import Motors
+from receiver import Receiver
+from safety import Safety, ARMED, STATE_NAMES
 
 RAD2DEG = 180.0 / math.pi
+MOTOR_MAX_US = config.MOTOR_MIN_US + (1000 * config.TEST_THROTTLE_MAX_PCT) // 100
 
 
 def make_sensor():
@@ -53,13 +57,46 @@ def accel_angles(ax, ay, az):
     return roll, pitch
 
 
-def main():
+def throttle_to_us(rx_us):
+    t = rx_us - 1000
+    if t < 0:
+        t = 0
+    elif t > 1000:
+        t = 1000
+    return config.MOTOR_MIN_US + t * (MOTOR_MAX_US - config.MOTOR_MIN_US) // 1000
+
+
+class Switch:
+    """Debounced arming switch. Closed to GND = on. Open or unplugged = off."""
+
+    def __init__(self, pin_num):
+        self.pin = Pin(pin_num, Pin.IN, Pin.PULL_UP)
+        self.on = False
+        self._last = False
+        self._count = 0
+
+    def read(self):
+        raw = self.pin.value() == 0
+        if raw == self._last:
+            self._count += 1
+            if self._count >= 5:
+                self.on = raw
+        else:
+            self._last = raw
+            self._count = 0
+        return self.on
+
+
+def run(motors):
     imu = connect()
-    bias = calibrate_gyro(imu, config.CAL_SAMPLES)
-    bx, by, bz = bias
+    bx, by, bz = calibrate_gyro(imu, config.CAL_SAMPLES)
+    rx = Receiver(config.RX_PIN)
+    switch = Switch(config.ARM_SWITCH_PIN)
+    safety = Safety()
 
     alpha = config.ALPHA
     print_period_us = 1000000 // config.PRINT_HZ
+    end = "\r" if config.PRINT_INPLACE else "\n"
 
     # Seed the filter from the accelerometer.
     while True:
@@ -76,49 +113,71 @@ def main():
     errors = 0
     consecutive = 0
 
-    print("ax(g) ay(g) az(g) | gx gy gz (deg/s) | roll pitch (deg) | loop Hz")
+    print("ax(g) ay(g) az(g) | gx gy gz (deg/s) | roll pitch (deg) | rx us | motor us | state | Hz")
     while True:
+        need_reinit = False
         try:
             ax, ay, az, gx, gy, gz = imu.read()
+            sample = (ax, ay, az, gx - bx, gy - by, gz - bz)
             consecutive = 0
         except OSError:
+            sample = None
             errors += 1
             consecutive += 1
             if consecutive >= config.ERR_REINIT:
                 consecutive = 0
-                try:
-                    imu.init()
-                    t_prev = time.ticks_us()
-                except OSError:
-                    pass
-            continue
+                need_reinit = True
 
         now = time.ticks_us()
-        dt = time.ticks_diff(now, t_prev) * 1e-6
-        t_prev = now
-        if dt <= 0 or dt > 0.1:
-            dt = 0.001  # skip a long gap (error recovery) instead of integrating it
 
-        gx -= bx
-        gy -= by
-        gz -= bz
+        if sample is not None:
+            dt = time.ticks_diff(now, t_prev) * 1e-6
+            t_prev = now
+            if dt <= 0 or dt > 0.1:
+                dt = 0.001  # skip a long gap instead of integrating it
+            gx = sample[3]
+            gy = sample[4]
+            acc_roll, acc_pitch = accel_angles(ax, ay, az)
+            roll = alpha * (roll + gx * dt) + (1.0 - alpha) * acc_roll
+            pitch = alpha * (pitch + gy * dt) + (1.0 - alpha) * acc_pitch
+            loops += 1
 
-        acc_roll, acc_pitch = accel_angles(ax, ay, az)
-        roll = alpha * (roll + gx * dt) + (1.0 - alpha) * acc_roll
-        pitch = alpha * (pitch + gy * dt) + (1.0 - alpha) * acc_pitch
+        rx_us, rx_age = rx.read()
+        state = safety.update(switch.read(), rx_us, rx_age, sample)
+        if state == ARMED:
+            motors.set_all(throttle_to_us(rx_us))
+        else:
+            motors.stop()
 
-        loops += 1
+        if need_reinit:
+            try:
+                imu.init()
+                t_prev = time.ticks_us()
+            except OSError:
+                pass
+
         elapsed = time.ticks_diff(now, t_print)
         if elapsed >= print_period_us:
             hz = loops * 1000000 // elapsed
-            print("\r%+6.3f %+6.3f %+6.3f | %+8.2f %+8.2f %+8.2f | %+7.2f %+7.2f | %5d Hz  err %-4d"
-                  % (ax, ay, az, gx, gy, gz, roll, pitch, hz, errors), end="")
+            rx_txt = "----" if rx_us is None or rx_age > config.RX_TIMEOUT_MS else "%4d" % rx_us
+            why = safety.reason
+            print("%+6.3f %+6.3f %+6.3f | %+8.2f %+8.2f %+8.2f | %+7.2f %+7.2f | rx %s | m %4d | %-6s %-11s | %5d Hz err %-4d"
+                  % (ax, ay, az, gx, gy, sample[5] if sample else 0.0, roll, pitch,
+                     rx_txt, motors.us, STATE_NAMES[state], why, hz, errors), end=end)
             loops = 0
             t_print = now
 
 
-try:
-    main()
-except KeyboardInterrupt:
-    print("")
-    print("stopped")
+def main():
+    # Output the off pulse first so the ESC sees a valid signal while the IMU starts.
+    motors = Motors(config.MOTOR_PINS, config.PWM_HZ, config.MOTOR_MIN_US, MOTOR_MAX_US)
+    try:
+        run(motors)
+    except KeyboardInterrupt:
+        print("")
+        print("stopped")
+    finally:
+        motors.stop()
+
+
+main()
