@@ -25,9 +25,7 @@ TEST_THROTTLE_MAX_PCT = 20
 RX_PIN = 7                      # GP7, header pin 10
 RX_TIMEOUT_MS = 500             # no pulse for this long = signal lost
 THROTTLE_LOW_US = 1050          # throttle must be below this to arm
-
-# ---- Arming switch (physical toggle between this GPIO and GND) ----
-ARM_SWITCH_PIN = 15             # GP15, header pin 20. Closed to GND = armed
+RESET_LOW_MS = 1000             # hold throttle low this long to clear a cutoff
 
 # ---- Jolt cutoff ----
 JOLT_G = 3.0            # total acceleration above this many g trips the cutoff

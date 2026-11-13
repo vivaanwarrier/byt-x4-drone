@@ -7,30 +7,30 @@ STATE_NAMES = ("DISARM", "ARMED", "TRIPPED")
 
 
 class Safety:
-    """Arming switch, signal-loss failsafe and jolt cutoff.
+    """Throttle-low arming, signal-loss failsafe and jolt cutoff.
 
     Rules:
     - Motors only run in ARMED.
-    - Arming needs: the switch turned off then on since power-up, a live
-      receiver signal, throttle low, a working IMU and no motion right now.
-    - Switch off always means DISARMED.
+    - Arming needs: a live receiver signal, throttle below THROTTLE_LOW_US,
+      a working IMU and no motion right now. So if the throttle stick is up
+      at power-up, nothing runs until it is brought down.
     - A jolt, lost IMU or lost receiver signal while armed trips TRIPPED.
-      TRIPPED stays until the arming switch is turned off.
+    - TRIPPED stays until the throttle stick is held low for RESET_LOW_MS.
     """
 
     def __init__(self):
         self.state = DISARMED
         self.reason = ""
-        self._switch_was_off = False
         self._jolts = 0
         self._errs = 0
+        self._low_since = None
         self._jolt_g2 = config.JOLT_G * config.JOLT_G
 
     def _trip(self, why):
         self.state = TRIPPED
         self.reason = why
 
-    def update(self, switch_on, rx_us, rx_age_ms, sample):
+    def update(self, now_ms, rx_us, rx_age_ms, sample):
         """sample is (ax, ay, az, gx, gy, gz) in g and deg/s, or None if the read failed."""
         if sample is None:
             self._errs += 1
@@ -45,15 +45,21 @@ class Safety:
                 self._jolts = 0
 
         rx_ok = rx_us is not None and rx_age_ms <= config.RX_TIMEOUT_MS
+        low = rx_ok and rx_us <= config.THROTTLE_LOW_US
 
-        if not switch_on:
-            self._switch_was_off = True
-            self.state = DISARMED
-            self.reason = ""
-            return self.state
+        if low:
+            if self._low_since is None:
+                self._low_since = now_ms
+            low_held = ((now_ms - self._low_since) & 0x3FFFFFFF) >= config.RESET_LOW_MS
+        else:
+            self._low_since = None
+            low_held = False
 
         if self.state == TRIPPED:
-            return self.state
+            if not low_held:
+                return self.state
+            self.state = DISARMED
+            self.reason = ""
 
         if self.state == ARMED:
             if self._jolts >= config.JOLT_SAMPLES:
@@ -64,12 +70,10 @@ class Safety:
                 self._trip("rx lost")
             return self.state
 
-        # DISARMED with the switch on: check every arming condition.
-        if not self._switch_was_off:
-            self.reason = "sw off first"
-        elif not rx_ok:
+        # DISARMED: check every arming condition.
+        if not rx_ok:
             self.reason = "no rx"
-        elif rx_us > config.THROTTLE_LOW_US:
+        elif not low:
             self.reason = "throttle up"
         elif sample is None:
             self.reason = "no imu"

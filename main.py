@@ -66,32 +66,10 @@ def throttle_to_us(rx_us):
     return config.MOTOR_MIN_US + t * (MOTOR_MAX_US - config.MOTOR_MIN_US) // 1000
 
 
-class Switch:
-    """Debounced arming switch. Closed to GND = on. Open or unplugged = off."""
-
-    def __init__(self, pin_num):
-        self.pin = Pin(pin_num, Pin.IN, Pin.PULL_UP)
-        self.on = False
-        self._last = False
-        self._count = 0
-
-    def read(self):
-        raw = self.pin.value() == 0
-        if raw == self._last:
-            self._count += 1
-            if self._count >= 5:
-                self.on = raw
-        else:
-            self._last = raw
-            self._count = 0
-        return self.on
-
-
 def run(motors):
     imu = connect()
     bx, by, bz = calibrate_gyro(imu, config.CAL_SAMPLES)
     rx = Receiver(config.RX_PIN)
-    switch = Switch(config.ARM_SWITCH_PIN)
     safety = Safety()
 
     alpha = config.ALPHA
@@ -143,7 +121,7 @@ def run(motors):
             loops += 1
 
         rx_us, rx_age = rx.read()
-        state = safety.update(switch.read(), rx_us, rx_age, sample)
+        state = safety.update(time.ticks_ms(), rx_us, rx_age, sample)
         if state == ARMED:
             motors.set_all(throttle_to_us(rx_us))
         else:

@@ -3,8 +3,7 @@
 Quadcopter flight controller for ECE 5, running MicroPython on a Raspberry Pi Pico 2 (RP2350).
 
 Current stage: bench test with props off. It reads an MPU6050, reads one RC channel
-(throttle) from a FlySky receiver, and drives the ESC outputs through an arming switch
-with failsafes. There is no stabilization yet: all motors get the same throttle.
+(throttle) from a FlySky receiver, and drives the ESC outputs with failsafes. There is no stabilization yet: all motors get the same throttle.
 
 ## Wiring
 
@@ -22,8 +21,6 @@ with failsafes. There is no stabilization yet: all motors get the same throttle.
 | ESC 3 | signal | GP12 | 16 |
 | ESC 4 | signal | GP13 | 17 |
 | ESC (each) | signal ground | any GND | e.g. 18 |
-| Arming switch | one leg | GP15 | 20 |
-| Arming switch | other leg | any GND | e.g. 18 |
 
 Notes:
 
@@ -31,37 +28,39 @@ Notes:
   onboard 3.3 V regulator (GY-521 boards do) and its VCC input is rated for 5 V. A bare
   3.3 V-only module must go on 3V3(OUT), pin 36.
 - **Grounds:** any GND pin works. They are all the same net (pins 3, 8, 13, 18, 23, 28, 38;
-  pin 33 is AGND, avoid it for digital use). What matters is that the IMU, receiver, arming switch
+  pin 33 is AGND, avoid it for digital use). What matters is that the IMU, receiver
   and every ESC signal ground share one common ground with the Pico, and the ESC battery
   negative is the same ground.
 - The receiver pin must be set to give a plain RC PWM channel (a 1000-2000 us pulse about every
   20 ms), for example the throttle channel (CH3) of an FS-iA6B. PPM and iBUS are not decoded here.
-- The arming switch is a plain toggle switch between GP15 and GND. Open or unplugged means off.
 
 ## Arming and safety
 
-Motors only run when armed. To arm:
+There is no arming switch. The throttle stick does the job:
 
-1. Switch off, throttle stick down, receiver on and bound.
-2. Flip the arming switch on. It arms only if the switch was seen off since power-up, the
-   receiver signal is live, throttle is below 1050 us, and the IMU is working and still.
-3. Raise throttle. Output goes from 1000 us up to a capped maximum
-   (`TEST_THROTTLE_MAX_PCT`, 20% by default).
+- At power-up the motors stay off until the receiver signal is live and the throttle stick is
+  down (below 1050 us), and the IMU is working and still. Then the state changes to ARMED.
+- If the stick is up at power-up, nothing runs until you bring it down.
+- When ARMED, output goes from 1000 us up to a capped maximum (`TEST_THROTTLE_MAX_PCT`, 20% by
+  default) as you raise the stick.
 
-Anything below cuts the motors to 1000 us:
+Anything below cuts the motors to 1000 us and shows TRIPPED:
 
-| Cause | Result | Reset |
-|-------|--------|-------|
-| Arming switch off | DISARM | flip on again |
-| Jolt: total acceleration above `JOLT_G` (3.0 g) or any gyro axis above `JOLT_DPS` (450 deg/s) for 2 samples in a row | TRIPPED (jolt) | switch off, then on |
-| Receiver signal missing for 500 ms | TRIPPED (rx lost) | switch off, then on |
-| IMU reads fail 10 times in a row | TRIPPED (imu lost) | switch off, then on |
-| Ctrl-C or error in the program | motors set to 1000 us | |
+| Cause | Reason shown |
+|-------|--------------|
+| Total acceleration above `JOLT_G` (3.0 g) or any gyro axis above `JOLT_DPS` (450 deg/s) for 2 samples in a row | jolt |
+| Receiver signal missing for 500 ms | rx lost |
+| IMU reads fail 10 times in a row | imu lost |
+
+TRIPPED stays until the throttle stick is held down for `RESET_LOW_MS` (1 second), then it arms
+again. Ctrl-C or an error in the program also sets the motors to 1000 us.
 
 Tune `JOLT_G` and `JOLT_DPS` in `config.py`. Spinning props can add vibration, so test on the
 bench before trusting the values.
 
 **Props off for every bench test.** Clamp the motor down. Connect the LiPo last and unplug it first.
+Without a switch there is no separate kill. To stop the motors, pull the stick all the way down,
+or unplug the LiPo.
 
 ## Setup (Mac)
 
@@ -100,14 +99,14 @@ tools/run.sh                     # copy files and run main.py, output here
 tools/deploy.sh                  # copy files so main.py runs on boot
 ```
 
-`tools/i2c_scan.py` tries every valid I2C pin pair (skipping GP7, GP10-GP13 and GP15) and prints
+`tools/i2c_scan.py` tries every valid I2C pin pair (skipping GP7 and GP10-GP13) and prints
 the pins and addresses that answer. If the IMU answers on other pins than GP8/GP9, edit
 `SDA_PIN`, `SCL_PIN` and `I2C_ID` in `config.py`.
 
 ## What gets printed
 
 ```
-+0.004 -0.002 +1.000 |    +0.00    -0.00    -0.00 |   -0.14   -0.21 | rx 1000 | m 1000 | DISARM  throttle up | 812 Hz err 0
++0.004 -0.002 +1.000 |    +0.00    -0.00    -0.00 |   -0.14   -0.21 | rx 1000 | m 1000 | DISARM throttle up | 812 Hz err 0
 ```
 
 | Field | Meaning |
@@ -117,7 +116,7 @@ the pins and addresses that answer. If the IMU answers on other pins than GP8/GP
 | roll, pitch | angle in degrees from the complementary filter. Flat is about 0, on its edge about +/-90 |
 | rx | throttle pulse from the receiver in us, or ---- if there is no signal |
 | m | pulse sent to the motors in us (1000 = off) |
-| state | DISARM, ARMED or TRIPPED, plus the reason arming is blocked or why it tripped |
+| state | DISARM, ARMED or TRIPPED, plus the reason it is blocked (no rx, throttle up, no imu, moving) or why it tripped |
 | Hz | measured loop rate |
 | err | count of I2C read errors since start |
 
@@ -132,6 +131,6 @@ so the ESC can arm.
   the ~42 Hz low-pass filter, reads all 14 data bytes in one burst.
 - `receiver.py`: measures one RC PWM channel with a pin interrupt.
 - `motors.py`: 50 Hz ESC pulses on GP10-GP13.
-- `safety.py`: arming switch, receiver failsafe, jolt cutoff.
+- `safety.py`: throttle-low arming, receiver failsafe, jolt cutoff.
 - `main.py`: gyro calibration, complementary filter (`0.98 * (angle + gyro * dt) + 0.02 * accel_angle`),
   safety, motor output and the status line.
