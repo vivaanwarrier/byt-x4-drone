@@ -1,14 +1,13 @@
 # Scan I2C on every valid I2C0/I2C1 pin pair and report which respond.
 # Run with:  mpremote run tools/i2c_scan.py
 #
-# Pins GP10-GP13 (ESC signals) are never touched. The receiver pin is not
-# known to this script, so a brief I2C scan can pull it up while it runs.
-# That is harmless with no battery connected.
+# Pins GP10-GP13 (ESC signals), GP7 (receiver) and GP15 (arming switch) are
+# never touched by this scan.
 
 from machine import I2C, SoftI2C, Pin
 import time
 
-RESERVED = (10, 11, 12, 13)
+RESERVED = (7, 10, 11, 12, 13, 15)
 
 # Valid hardware I2C pins on the Pico 2 (RP2350) header.
 I2C_PINS = {
@@ -41,7 +40,7 @@ def scan_hw():
 def scan_soft():
     # Diagnostic fallback: bit-banged I2C on any free pin pair. Finds the
     # sensor even if SDA and SCL wires are swapped or on non-I2C-capable pins.
-    pins = [p for p in list(range(0, 10)) + list(range(14, 23)) + [26, 27, 28]]
+    pins = [p for p in list(range(0, 23)) + [26, 27, 28] if p not in RESERVED]
     found = []
     for sda in pins:
         for scl in pins:
@@ -59,7 +58,7 @@ def scan_soft():
     return found
 
 
-print("Scanning hardware I2C pin pairs (GP10-GP13 skipped)...")
+print("Scanning hardware I2C pin pairs (GP7, GP10-GP13, GP15 skipped)...")
 hw = scan_hw()
 imu = [f for f in hw if any(a in IMU_ADDRS for a in f[3])]
 
