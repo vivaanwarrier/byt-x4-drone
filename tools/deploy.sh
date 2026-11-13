@@ -5,6 +5,6 @@ cd "$(dirname "$0")/.."
 
 MP=$(command -v mpremote || echo "$HOME/.local/bin/mpremote")
 
-"$MP" connect auto fs cp config.py mpu6050.py main.py : + reset
+"$MP" connect auto fs cp config.py mpu6050.py motors.py receiver.py safety.py main.py : + reset
 echo "Deployed. main.py now runs on boot."
 echo "Watch it with:  mpremote connect auto repl   (Ctrl-] to leave)"

@@ -7,4 +7,4 @@ cd "$(dirname "$0")/.."
 
 MP=$(command -v mpremote || echo "$HOME/.local/bin/mpremote")
 
-exec "$MP" connect auto fs cp config.py mpu6050.py : + run main.py
+exec "$MP" connect auto fs cp config.py mpu6050.py motors.py receiver.py safety.py : + run main.py
